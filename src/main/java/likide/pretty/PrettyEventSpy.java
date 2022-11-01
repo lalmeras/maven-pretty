@@ -57,7 +57,9 @@ public class PrettyEventSpy extends AbstractEventSpy {
 						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(started(project));
 					}
 				}
-				Thread.sleep(TimeUnit.MILLISECONDS.toMillis(100));
+//				Thread.sleep(TimeUnit.MILLISECONDS.toMillis(100));
+				
+				// TODO: on session close, give thread a grace time to end display
 			}
 		} catch (RuntimeException e) {
 			e.printStackTrace();
@@ -65,28 +67,35 @@ public class PrettyEventSpy extends AbstractEventSpy {
 	}
 
 	private ProjectStatus started(MavenProject mavenProject) {
-		return new ProjectStatus(mavenProject, "started", null, null);
+		return new ProjectStatus(mavenProject, ProjectStatusType.PLANNED, null, null);
 	}
 
 	private ProjectStatus planned(MavenProject mavenProject) {
-		return new ProjectStatus(mavenProject, "planned", null, null);
+		return new ProjectStatus(mavenProject, ProjectStatusType.PLANNED, null, null);
 	}
 
 	private ProjectStatus execution(MavenProject mavenProject, MojoExecution mojoExecution, Type type) {
-		return new ProjectStatus(mavenProject, mojoExecution.toString(), new ProjectMojoExecution(mojoExecution, type), null);
+		return new ProjectStatus(mavenProject, ProjectStatusType.BUILDING, new ProjectMojoExecution(mojoExecution, type), null);
 	}
 
 	private ProjectStatus built(MavenProject mavenProject) {
-		return new ProjectStatus(mavenProject, "built", null, null);
+		return new ProjectStatus(mavenProject, ProjectStatusType.SUCCESS, null, null);
 	}
 
 	private ProjectStatus failed(MavenProject mavenProject) {
-		return new ProjectStatus(mavenProject, "failed", null, null);
+		return new ProjectStatus(mavenProject, ProjectStatusType.FAILED, null, null);
+	}
+
+	enum ProjectStatusType {
+		PLANNED,
+		BUILDING,
+		SUCCESS,
+		FAILED;
 	}
 
 	public class ProjectStatus {
 		private final MavenProject mavenProject;
-		private final String status;
+		private final ProjectStatusType status;
 		private final List<ProjectMojoExecution> previousSteps;
 		private final ProjectMojoExecution currentStep;
 		
@@ -94,7 +103,7 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			this(currentStatus.mavenProject, currentStatus.status, currentStatus.currentStep, lastStatus);
 		}
 		
-		public ProjectStatus(MavenProject mavenProject, String status, ProjectMojoExecution currentStep, ProjectStatus lastStatus) {
+		public ProjectStatus(MavenProject mavenProject, ProjectStatusType status, ProjectMojoExecution currentStep, ProjectStatus lastStatus) {
 			this.mavenProject = mavenProject;
 			this.status = status;
 			this.currentStep = currentStep;
@@ -112,9 +121,32 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			}
 		}
 		
-		@Override
-		public String toString() {
-			return String.format("%s:%s:%s: %s%s", mavenProject.getGroupId(), mavenProject.getArtifactId(), mavenProject.getVersion(), lastSteps(), status);
+		public String toString(int clock) {
+			return String.format("%s %s:%s:%s: %s", status(clock), mavenProject.getGroupId(), mavenProject.getArtifactId(), mavenProject.getVersion(), lastSteps());
+		}
+		
+		public String status(int clock) {
+			switch (status) {
+			case BUILDING:
+				switch ((clock/10)%3) {
+					case 0:
+						return "\033[1;34m․\033[0m";
+					case 1:
+						return "\033[1;34m‥\033[0m";
+					case 2:
+						return "\033[1;34m…\033[0m";
+					default:
+						throw new IllegalStateException();
+				}
+			case FAILED:
+				return "\033[1;31m✘\033[0m";
+			case PLANNED:
+				return "\033[1;33m⧖\033[0m";
+			case SUCCESS:
+				return "\033[1;32m✔\033[0m";
+			default:
+				throw new IllegalStateException();
+			}
 		}
 		
 		public String lastSteps() {
@@ -141,7 +173,18 @@ public class PrettyEventSpy extends AbstractEventSpy {
 
 	public void output() {
 		try {
+			// TODO: limit display when there is more projects than terminal line count
+			// Isolate waiting / building / finished projects
+			// Print and do not erase finished projects
+			// Print one line with skipped projects (N projects skipped)
+			// Print one line with built projects (N projects built successfully)
+			// Print one line with failed projects (N projects failed)
+			// Print one line with waiting projects (N projects waiting to be processed)
+			// Print lines with built projects
+			int clock = 0;
 			while (true) {
+				clock++;
+				clock = clock%10000;
 				StringBuilder sb = new StringBuilder();
 				int loopLength = 0;
 				for (Entry<MavenProject, Deque<ProjectStatus>> entry : output.entrySet()) {
@@ -153,7 +196,7 @@ public class PrettyEventSpy extends AbstractEventSpy {
 					} else {
 						currentStatus = lastStatus;
 					}
-					sb.append(currentStatus);
+					sb.append(currentStatus.toString(clock));
 					sb.append("\n");
 					loopLength++;
 				}
