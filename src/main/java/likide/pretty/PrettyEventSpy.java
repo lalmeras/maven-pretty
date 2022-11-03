@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -24,8 +25,17 @@ import org.codehaus.plexus.component.annotations.Component;
 @Named("maven-pretty")
 @Component(role = EventSpy.class, hint = "output", description = "Pretty output for maven build.")
 public class PrettyEventSpy extends AbstractEventSpy {
+	private static final String TERM_LINE_UP = "%dA";
+	private static final String TERM_LINE_BACK = "2K";
+	private static final String TERM_ESCAPE = "\033[";
+	private static final String TERM_RESET = "\033[0m";
+	private static final String TERM_BOLD_GREEN = "1;32m";
+	private static final String TERM_BOLD_YELLOW = "1;33m";
+	private static final String TERM_BOLD_RED = "1;31m";
+	private static final String TERM_BOLD_BLUE = "1;34m";
 
 	private AtomicReference<Thread> outputThread = new AtomicReference<>();
+	private AtomicBoolean terminated = new AtomicBoolean(false);
 	private Map<MavenProject, Deque<ProjectStatus>> output = new ConcurrentHashMap<>();
 	private Map<MavenProject, ProjectStatus> lastStatuses = new ConcurrentHashMap<>();
 	private int lastLoopLength = 0;
@@ -57,9 +67,11 @@ public class PrettyEventSpy extends AbstractEventSpy {
 						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(started(project));
 					}
 				}
-//				Thread.sleep(TimeUnit.MILLISECONDS.toMillis(100));
-				
-				// TODO: on session close, give thread a grace time to end display
+				if (Type.SessionEnded.equals(executionEvent.getType())) {
+					// wait for output termination
+					terminated.set(true);
+					outputThread.get().join();
+				}
 			}
 		} catch (RuntimeException e) {
 			e.printStackTrace();
@@ -130,20 +142,20 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			case BUILDING:
 				switch ((clock/10)%3) {
 					case 0:
-						return "\033[1;34m․\033[0m";
+						return TERM_ESCAPE + TERM_BOLD_BLUE + "․" + TERM_RESET;
 					case 1:
-						return "\033[1;34m‥\033[0m";
+						return TERM_ESCAPE + TERM_BOLD_BLUE + "‥" + TERM_RESET;
 					case 2:
-						return "\033[1;34m…\033[0m";
+						return TERM_ESCAPE + TERM_BOLD_BLUE + "…" + TERM_RESET;
 					default:
 						throw new IllegalStateException();
 				}
 			case FAILED:
-				return "\033[1;31m✘\033[0m";
+				return TERM_ESCAPE + TERM_BOLD_RED + "✘" + TERM_RESET;
 			case PLANNED:
-				return "\033[1;33m⧖\033[0m";
+				return TERM_ESCAPE + TERM_BOLD_YELLOW + "⧖" + TERM_RESET;
 			case SUCCESS:
-				return "\033[1;32m✔\033[0m";
+				return TERM_ESCAPE + TERM_BOLD_GREEN + "✔" + TERM_RESET;
 			default:
 				throw new IllegalStateException();
 			}
@@ -182,35 +194,43 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			// Print one line with waiting projects (N projects waiting to be processed)
 			// Print lines with built projects
 			int clock = 0;
-			while (true) {
+			boolean empty = false;
+			while (!terminated.get() || !empty) {
 				clock++;
 				clock = clock%10000;
-				StringBuilder sb = new StringBuilder();
-				int loopLength = 0;
-				for (Entry<MavenProject, Deque<ProjectStatus>> entry : output.entrySet()) {
-					ProjectStatus lastStatus = lastStatuses.get(entry.getKey());
-					ProjectStatus currentStatus = entry.getValue().poll();
-					if (currentStatus != null) {
-						currentStatus = new ProjectStatus(currentStatus, lastStatus);
-						lastStatuses.put(entry.getKey(), currentStatus);
-					} else {
-						currentStatus = lastStatus;
-					}
-					sb.append(currentStatus.toString(clock));
-					sb.append("\n");
-					loopLength++;
-				}
-				for (int i = 0; i < lastLoopLength; i++) {
-					System.out.print("\033[2K");
-					System.out.print(String.format("\033[%dA", 1));
-					System.out.print("\033[2K");
-				}
-				lastLoopLength = loopLength;
-				System.out.print(sb);
+				empty = printFrame(clock);
 				Thread.sleep(TimeUnit.MILLISECONDS.toMillis(50));
 			}
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
+	}
+
+	private boolean printFrame(int clock) {
+		StringBuilder sb = new StringBuilder();
+		int loopLength = 0;
+		boolean empty = true;
+		for (Entry<MavenProject, Deque<ProjectStatus>> entry : output.entrySet()) {
+			ProjectStatus lastStatus = lastStatuses.get(entry.getKey());
+			ProjectStatus currentStatus = entry.getValue().poll();
+			if (currentStatus != null) {
+				empty = false;
+				currentStatus = new ProjectStatus(currentStatus, lastStatus);
+				lastStatuses.put(entry.getKey(), currentStatus);
+			} else {
+				currentStatus = lastStatus;
+			}
+			sb.append(currentStatus.toString(clock));
+			sb.append("\n");
+			loopLength++;
+		}
+		for (int i = 0; i < lastLoopLength; i++) {
+			System.out.print(TERM_ESCAPE + TERM_LINE_BACK);
+			System.out.print(String.format(TERM_ESCAPE + TERM_LINE_UP, 1));
+			System.out.print(TERM_ESCAPE + TERM_LINE_BACK);
+		}
+		lastLoopLength = loopLength;
+		System.out.print(sb);
+		return empty;
 	}
 }
