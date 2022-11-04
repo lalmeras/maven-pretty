@@ -1,5 +1,7 @@
 package likide.pretty;
 
+import java.io.File;
+import java.io.PrintStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -21,6 +23,8 @@ import org.apache.maven.execution.ExecutionEvent.Type;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.project.MavenProject;
 import org.codehaus.plexus.component.annotations.Component;
+import org.codehaus.plexus.component.annotations.Requirement;
+import org.codehaus.plexus.logging.LoggerManager;
 
 @Named("maven-pretty")
 @Component(role = EventSpy.class, hint = "output", description = "Pretty output for maven build.")
@@ -29,16 +33,22 @@ public class PrettyEventSpy extends AbstractEventSpy {
 	private static final String TERM_LINE_BACK = "2K";
 	private static final String TERM_ESCAPE = "\033[";
 	private static final String TERM_RESET = "\033[0m";
+	private static final String TERM_BOLD = "1m";
 	private static final String TERM_BOLD_GREEN = "1;32m";
 	private static final String TERM_BOLD_YELLOW = "1;33m";
 	private static final String TERM_BOLD_RED = "1;31m";
 	private static final String TERM_BOLD_BLUE = "1;34m";
 
+	@Requirement
+	private LoggerManager loggerManager;
+
 	private AtomicReference<Thread> outputThread = new AtomicReference<>();
 	private AtomicBoolean terminated = new AtomicBoolean(false);
-	private Map<MavenProject, Deque<ProjectStatus>> output = new ConcurrentHashMap<>();
+	private Map<MavenProject, Deque<ProjectStatus>> queues = new ConcurrentHashMap<>();
 	private Map<MavenProject, ProjectStatus> lastStatuses = new ConcurrentHashMap<>();
 	private int lastLoopLength = 0;
+	private PrintStream output = System.out;
+	private File mavenOutputFile = null;
 
 	@Override
 	public synchronized void onEvent(Object event) throws Exception {
@@ -52,20 +62,26 @@ public class PrettyEventSpy extends AbstractEventSpy {
 				ExecutionEvent executionEvent = (ExecutionEvent) event;
 				if (Type.SessionStarted.equals(executionEvent.getType())) {
 					for (MavenProject project : executionEvent.getSession().getProjects()) {
-						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(planned(project));
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(planned(project));
 					}
 				}
 				MavenProject project = executionEvent.getProject();
 				if (project != null) {
 					if (Type.ProjectSucceeded.equals(executionEvent.getType())) {
-						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(built(project));
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(built(project));
 					} else if (Type.ProjectFailed.equals(executionEvent.getType())) {
-						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(failed(project));
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(failed(project));
 					} else if (executionEvent.getMojoExecution() != null) {
-						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(execution(project, executionEvent.getMojoExecution(), executionEvent.getType()));
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(execution(project, executionEvent.getMojoExecution(), executionEvent.getType()));
 					} else {
-						output.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(started(project));
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(started(project));
 					}
+				}
+				if (Type.SessionStarted.equals(executionEvent.getType())) {
+					mavenOutputFile = File.createTempFile("maven-", ".log");
+					PrintStream filePrintStream = new PrintStream(mavenOutputFile);
+					System.setOut(filePrintStream);
+					System.setErr(filePrintStream);
 				}
 				if (Type.SessionEnded.equals(executionEvent.getType())) {
 					// wait for output termination
@@ -103,6 +119,9 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		BUILDING,
 		SUCCESS,
 		FAILED;
+		public boolean isFinished() {
+			return this == SUCCESS || this == FAILED;
+		}
 	}
 
 	public class ProjectStatus {
@@ -134,28 +153,32 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		}
 		
 		public String toString(int clock) {
-			return String.format("%s %s:%s:%s: %s", status(clock), mavenProject.getGroupId(), mavenProject.getArtifactId(), mavenProject.getVersion(), lastSteps());
+			return String.format("%s %s: %s", status(clock), mavenProject.getArtifactId(), lastPhases(clock));
 		}
 		
 		public String status(int clock) {
 			switch (status) {
 			case BUILDING:
-				switch ((clock/10)%3) {
-					case 0:
-						return TERM_ESCAPE + TERM_BOLD_BLUE + "․" + TERM_RESET;
-					case 1:
-						return TERM_ESCAPE + TERM_BOLD_BLUE + "‥" + TERM_RESET;
-					case 2:
-						return TERM_ESCAPE + TERM_BOLD_BLUE + "…" + TERM_RESET;
-					default:
-						throw new IllegalStateException();
-				}
+				return dot(clock);
 			case FAILED:
 				return TERM_ESCAPE + TERM_BOLD_RED + "✘" + TERM_RESET;
 			case PLANNED:
-				return TERM_ESCAPE + TERM_BOLD_YELLOW + "⧖" + TERM_RESET;
+				return TERM_ESCAPE + TERM_BOLD_BLUE + "⧖" + TERM_RESET;
 			case SUCCESS:
 				return TERM_ESCAPE + TERM_BOLD_GREEN + "✔" + TERM_RESET;
+			default:
+				throw new IllegalStateException();
+			}
+		}
+		
+		public String dot(int clock) {
+			switch ((clock/10)%3) {
+			case 0:
+				return TERM_ESCAPE + TERM_BOLD_YELLOW + "․" + TERM_RESET;
+			case 1:
+				return TERM_ESCAPE + TERM_BOLD_YELLOW + "‥" + TERM_RESET;
+			case 2:
+				return TERM_ESCAPE + TERM_BOLD_YELLOW + "…" + TERM_RESET;
 			default:
 				throw new IllegalStateException();
 			}
@@ -167,6 +190,29 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			}
 			return previousSteps.stream().map(i -> i.goal).collect(Collectors.joining(", ", "(", ")")) + " ";
 		}
+		
+		public String lastPhases(int clock) {
+			if (previousSteps == null) {
+				return "";
+			}
+			List<String> phases = previousSteps.stream().map(i -> i.phase).distinct().collect(Collectors.toList());
+			StringBuilder sb = new StringBuilder();
+			sb.append(phases.stream().collect(Collectors.joining(", ")));
+			if (currentStep != null && !phases.isEmpty()) {
+				String lastBeforeCurrent = phases.stream().skip(phases.size() - 1l).findFirst().orElse(null);
+				if (lastBeforeCurrent != null && lastBeforeCurrent.equals(currentStep.phase)) {
+					// last phase is still performing
+					sb.append(dot(clock));
+				} else if (lastBeforeCurrent != null && !lastBeforeCurrent.equals(currentStep.phase)) {
+					sb.append(", " + currentStep.phase + dot(clock));
+				} else if (lastBeforeCurrent == null) {
+					sb.append(currentStep.phase + dot(clock));
+				}
+			} else if (currentStep != null) {
+				sb.append(currentStep.phase + dot(clock));
+			}
+			return sb.toString();
+		}
 	}
 
 	public class ProjectMojoExecution {
@@ -174,25 +220,19 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		private final String executionId;
 		private final Type status;
 		private final String goal;
+		private final String phase;
 		
 		public ProjectMojoExecution(MojoExecution execution, Type status) {
 			this.key = execution.toString();
 			this.executionId = execution.getExecutionId();
 			this.status = status;
 			this.goal = execution.getGoal();
+			this.phase = execution.getLifecyclePhase();
 		}
 	}
 
 	public void output() {
 		try {
-			// TODO: limit display when there is more projects than terminal line count
-			// Isolate waiting / building / finished projects
-			// Print and do not erase finished projects
-			// Print one line with skipped projects (N projects skipped)
-			// Print one line with built projects (N projects built successfully)
-			// Print one line with failed projects (N projects failed)
-			// Print one line with waiting projects (N projects waiting to be processed)
-			// Print lines with built projects
 			int clock = 0;
 			boolean empty = false;
 			while (!terminated.get() || !empty) {
@@ -204,33 +244,63 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}
+		output.println(String.format("Maven output available in %s", mavenOutputFile));
 	}
 
 	private boolean printFrame(int clock) {
-		StringBuilder sb = new StringBuilder();
-		int loopLength = 0;
+		// TODO: limit display when there is more projects than terminal line count
+		// Print one line with skipped projects (N projects skipped)
 		boolean empty = true;
-		for (Entry<MavenProject, Deque<ProjectStatus>> entry : output.entrySet()) {
+		List<String> building = new ArrayList<>();
+		List<String> finished = new ArrayList<>();
+		int nbFailed = 0;
+		int nbSuccess = 0;
+		int nbPlanned = 0;
+		for (Entry<MavenProject, Deque<ProjectStatus>> entry : queues.entrySet()) {
+			StringBuilder sb = new StringBuilder();
 			ProjectStatus lastStatus = lastStatuses.get(entry.getKey());
 			ProjectStatus currentStatus = entry.getValue().poll();
+			ProjectStatus effectiveStatus;
 			if (currentStatus != null) {
 				empty = false;
-				currentStatus = new ProjectStatus(currentStatus, lastStatus);
-				lastStatuses.put(entry.getKey(), currentStatus);
+				effectiveStatus = new ProjectStatus(currentStatus, lastStatus);
+				lastStatuses.put(entry.getKey(), effectiveStatus);
 			} else {
-				currentStatus = lastStatus;
+				effectiveStatus = lastStatus;
 			}
-			sb.append(currentStatus.toString(clock));
-			sb.append("\n");
-			loopLength++;
+			sb.append(effectiveStatus.toString(clock));
+			if (effectiveStatus.status.isFinished()) {
+				if (currentStatus != null) {
+					finished.add(sb.toString());
+				}
+				if (ProjectStatusType.SUCCESS.equals(effectiveStatus.status)) {
+					nbSuccess++;
+				} else if (ProjectStatusType.FAILED.equals(effectiveStatus.status)) {
+					nbFailed++;
+				}
+			} else if (ProjectStatusType.PLANNED.equals(effectiveStatus.status)) {
+				nbPlanned++;
+			} else {
+				building.add(sb.toString());
+			}
 		}
 		for (int i = 0; i < lastLoopLength; i++) {
-			System.out.print(TERM_ESCAPE + TERM_LINE_BACK);
-			System.out.print(String.format(TERM_ESCAPE + TERM_LINE_UP, 1));
-			System.out.print(TERM_ESCAPE + TERM_LINE_BACK);
+			output.print(TERM_ESCAPE + TERM_LINE_BACK);
+			output.print(String.format(TERM_ESCAPE + TERM_LINE_UP, 1));
+			output.print(TERM_ESCAPE + TERM_LINE_BACK);
 		}
+		for (String finishedItem : finished) {
+			output.println(finishedItem);
+		}
+		int loopLength = 0;
+		for (String buildingItem : building) {
+			output.println(buildingItem);
+			loopLength++;
+		}
+		output.println(String.format("Built " + TERM_ESCAPE + TERM_BOLD + "%5$d/%4$d" + TERM_RESET + " projects... Failed: %1$d - Success: %2$d - Planned: %3$d",
+				nbFailed, nbSuccess, nbPlanned, queues.size(), nbSuccess));
+		loopLength++;
 		lastLoopLength = loopLength;
-		System.out.print(sb);
 		return empty;
 	}
 }
