@@ -8,6 +8,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -38,6 +39,7 @@ public class PrettyEventSpy extends AbstractEventSpy {
 	private static final String TERM_BOLD_YELLOW = "1;33m";
 	private static final String TERM_BOLD_RED = "1;31m";
 	private static final String TERM_BOLD_BLUE = "1;34m";
+	private static final String TERM_GREY = "38;5;8m";
 
 	@Requirement
 	private LoggerManager loggerManager;
@@ -202,7 +204,16 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			if (previousSteps == null) {
 				return "";
 			}
-			List<String> phases = previousSteps.stream().map(i -> i.phase).distinct().collect(Collectors.toList());
+			List<String> phases = previousSteps.stream().map(i -> phaseOrPlugin(i)).distinct().collect(Collectors.toList());
+			if (ProjectStatusType.SUCCESS.equals(status)) {
+				if (phases.isEmpty()) {
+					return "";
+				} else if (phases.size() == 1) {
+					return TERM_ESCAPE + TERM_GREY + phases.get(0) + TERM_RESET;
+				} else {
+					return String.format(TERM_ESCAPE + TERM_GREY + "%s … %s", phases.get(0), phases.get(phases.size() - 1) + TERM_RESET);
+				}
+			}
 			StringBuilder sb = new StringBuilder();
 			sb.append(phases.stream().collect(Collectors.joining(", ")));
 			if (currentStep != null && !phases.isEmpty()) {
@@ -220,6 +231,18 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			}
 			return sb.toString();
 		}
+		
+		public String phaseOrPlugin(ProjectMojoExecution execution) {
+			return Optional.ofNullable(execution.phase).orElseGet(() -> shortGoal(execution));
+		}
+		
+		public String shortGoal(ProjectMojoExecution execution) {
+			if (execution.artifactId.startsWith("maven-") && execution.artifactId.endsWith("-plugin")) {
+				return String.format("%s:%s", execution.artifactId.substring("maven-".length(), execution.artifactId.length() - "-plugin".length()), execution.goal);
+			} else {
+				return String.format("%s:%s", execution.artifactId, execution.goal);
+			}
+		}
 	}
 
 	public class ProjectMojoExecution {
@@ -228,6 +251,8 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		private final Type status;
 		private final String goal;
 		private final String phase;
+		private final String groupId;
+		private final String artifactId;
 		
 		public ProjectMojoExecution(MojoExecution execution, Type status) {
 			this.key = execution.toString();
@@ -235,6 +260,8 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			this.status = status;
 			this.goal = execution.getGoal();
 			this.phase = execution.getLifecyclePhase();
+			this.groupId = execution.getGroupId();
+			this.artifactId = execution.getArtifactId();
 		}
 	}
 
