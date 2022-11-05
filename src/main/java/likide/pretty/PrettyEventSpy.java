@@ -71,6 +71,8 @@ public class PrettyEventSpy extends AbstractEventSpy {
 						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(built(project));
 					} else if (Type.ProjectFailed.equals(executionEvent.getType())) {
 						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(failed(project));
+					} else if (Type.ProjectSkipped.equals(executionEvent.getType())) {
+						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(skipped(project));
 					} else if (executionEvent.getMojoExecution() != null) {
 						queues.computeIfAbsent(project, (i) -> new ArrayDeque<>(10)).offer(execution(project, executionEvent.getMojoExecution(), executionEvent.getType()));
 					} else {
@@ -114,11 +116,16 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		return new ProjectStatus(mavenProject, ProjectStatusType.FAILED, null, null);
 	}
 
+	private ProjectStatus skipped(MavenProject mavenProject) {
+		return new ProjectStatus(mavenProject, ProjectStatusType.SKIPPED, null, null);
+	}
+
 	enum ProjectStatusType {
 		PLANNED,
 		BUILDING,
 		SUCCESS,
-		FAILED;
+		FAILED,
+		SKIPPED;
 		public boolean isFinished() {
 			return this == SUCCESS || this == FAILED;
 		}
@@ -256,6 +263,7 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		int nbFailed = 0;
 		int nbSuccess = 0;
 		int nbPlanned = 0;
+		int nbSkipped = 0;
 		for (Entry<MavenProject, Deque<ProjectStatus>> entry : queues.entrySet()) {
 			StringBuilder sb = new StringBuilder();
 			ProjectStatus lastStatus = lastStatuses.get(entry.getKey());
@@ -275,6 +283,8 @@ public class PrettyEventSpy extends AbstractEventSpy {
 				}
 				if (ProjectStatusType.SUCCESS.equals(effectiveStatus.status)) {
 					nbSuccess++;
+				} else if (ProjectStatusType.SKIPPED.equals(effectiveStatus.status)) {
+					nbSkipped++;
 				} else if (ProjectStatusType.FAILED.equals(effectiveStatus.status)) {
 					nbFailed++;
 				}
@@ -285,7 +295,6 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			}
 		}
 		for (int i = 0; i < lastLoopLength; i++) {
-			output.print(TERM_ESCAPE + TERM_LINE_BACK);
 			output.print(String.format(TERM_ESCAPE + TERM_LINE_UP, 1));
 			output.print(TERM_ESCAPE + TERM_LINE_BACK);
 		}
@@ -297,8 +306,8 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			output.println(buildingItem);
 			loopLength++;
 		}
-		output.println(String.format("Built " + TERM_ESCAPE + TERM_BOLD + "%5$d/%4$d" + TERM_RESET + " projects... Failed: %1$d - Success: %2$d - Planned: %3$d",
-				nbFailed, nbSuccess, nbPlanned, queues.size(), nbSuccess));
+		output.println(String.format("Built " + TERM_ESCAPE + TERM_BOLD + "%5$d/%4$d" + TERM_RESET + " projects... Failed: %1$d - Success: %2$d - Planned: %3$d - Skipped: %4$s",
+				nbFailed, nbSuccess, nbPlanned, queues.size(), nbSuccess, nbSkipped));
 		loopLength++;
 		lastLoopLength = loopLength;
 		return empty;
