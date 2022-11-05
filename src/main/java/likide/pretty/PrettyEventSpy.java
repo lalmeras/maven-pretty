@@ -19,6 +19,7 @@ import javax.inject.Named;
 
 import org.apache.maven.eventspy.AbstractEventSpy;
 import org.apache.maven.eventspy.EventSpy;
+import org.apache.maven.execution.DefaultMavenExecutionRequest;
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionEvent.Type;
 import org.apache.maven.plugin.MojoExecution;
@@ -26,6 +27,9 @@ import org.apache.maven.project.MavenProject;
 import org.codehaus.plexus.component.annotations.Component;
 import org.codehaus.plexus.component.annotations.Requirement;
 import org.codehaus.plexus.logging.LoggerManager;
+import org.eclipse.aether.transfer.TransferCancelledException;
+import org.eclipse.aether.transfer.TransferEvent;
+import org.eclipse.aether.transfer.TransferListener;
 
 @Named("maven-pretty")
 @Component(role = EventSpy.class, hint = "output", description = "Pretty output for maven build.")
@@ -59,6 +63,46 @@ public class PrettyEventSpy extends AbstractEventSpy {
 				outputThread.set(new Thread(this::output));
 				outputThread.get().setDaemon(true);
 				outputThread.get().start();
+			}
+			if (event instanceof DefaultMavenExecutionRequest) {
+				((DefaultMavenExecutionRequest) event).setTransferListener(new TransferListener() {
+					
+					@Override
+					public void transferSucceeded(TransferEvent event) {
+						// TODO Auto-generated method stub
+						
+					}
+					
+					@Override
+					public void transferStarted(TransferEvent event) throws TransferCancelledException {
+						// TODO Auto-generated method stub
+						
+					}
+					
+					@Override
+					public void transferProgressed(TransferEvent event) throws TransferCancelledException {
+						// TODO Auto-generated method stub
+						
+					}
+					
+					@Override
+					public void transferInitiated(TransferEvent event) throws TransferCancelledException {
+						// TODO Auto-generated method stub
+						
+					}
+					
+					@Override
+					public void transferFailed(TransferEvent event) {
+						// TODO Auto-generated method stub
+						
+					}
+					
+					@Override
+					public void transferCorrupted(TransferEvent event) throws TransferCancelledException {
+						// TODO Auto-generated method stub
+						
+					}
+				});
 			}
 			if (event instanceof ExecutionEvent) {
 				ExecutionEvent executionEvent = (ExecutionEvent) event;
