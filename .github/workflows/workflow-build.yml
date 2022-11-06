@@ -1,0 +1,67 @@
+---
+
+name: Build
+on:
+  workflow_call:
+    inputs:
+      verbose:
+        description: Verbose output
+        default: false
+        required: false
+        type: boolean
+      environment:
+        description: Github environment
+        type: string
+        required: true
+        default: local
+    secrets:
+      AWS_ENDPOINT:
+        required: false
+      AWS_REGION:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+jobs:
+  build:
+    environment: ${{ inputs.environment }}
+    env:
+      MVN: ./mvnw -q -B
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+      - name: java
+        uses: actions/setup-java@v3
+        with:
+          # 11 is needed as `--release 8` flag is used for compiling
+          distribution: adopt
+          java-version: 11
+      - name: verbose activation
+        # redefine MVN command
+        if: ${{ github.event.inputs.verbose }}
+        run: echo 'MVN=./mvnw -B' >> $GITHUB_ENV
+      - name: build, test and package
+        run: |
+          $MVN clean package
+      - name: site
+        run: |
+          $MVN site
+      - name: deploy-site
+        env:
+          RCLONE_CONFIG_DEFAULT_TYPE: s3
+          RCLONE_CONFIG_DEFAULT_ENV_AUTH: true
+          RCLONE_CONFIG_DEFAULT_ENDPOINT: ${{ secrets.AWS_ENDPOINT }}
+          RCLONE_CONFIG_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          DEBIAN_FRONTEND: noninteractive
+        if: |
+          env.RCLONE_CONFIG_DEFAULT_ENDPOINT != ''
+          && env.RCLONE_CONFIG_DEFAULT_REGION != ''
+          && env.AWS_ACCESS_KEY_ID != ''
+          && env.AWS_SECRET_ACCESS_KEY != ''
+        run: |
+          sudo apt-get install -qq -y rclone
+          $MVN exec:exec@deploy-site

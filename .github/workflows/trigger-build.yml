@@ -1,0 +1,19 @@
+---
+
+name: Build
+on: push
+jobs:
+  build:
+    if: github.ref_name != 'main' && github.ref_name != 'gh'
+    uses: ./.github/workflows/workflow-build.yml
+    with:
+      verbose: false
+      environment: local
+    secrets: inherit
+  build-release:
+    if: github.ref_name == 'main' || github.ref_name == 'gh'
+    uses: ./.github/workflows/workflow-build.yml
+    with:
+      verbose: false
+      environment: release
+    secrets: inherit

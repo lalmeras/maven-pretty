@@ -1,0 +1,21 @@
+<?xml version="1.0" ?>
+<project name="Maven pretty extension"
+         xmlns="http://maven.apache.org/DECORATION/1.6.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/DECORATION/1.6.0 http://maven.apache.org/xsd/decoration-1.6.0.xsd">
+	<body>
+		<menu>
+			<item name="Usage" />
+		</menu>
+		<menu ref="reports"/>
+	</body>
+	<poweredBy>
+		<logo name="Maven" href="https://maven.apache.org/"
+		      img="https://maven.apache.org/images/logos/maven-feather.png"/>
+	</poweredBy>
+	<skin>
+		<groupId>org.apache.maven.skins</groupId>
+		<artifactId>maven-fluido-skin</artifactId>
+		<version>${maven-fluido.version}</version>
+	</skin>
+</project>
