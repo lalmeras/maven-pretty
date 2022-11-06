@@ -13,6 +13,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.MatchResult;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.inject.Named;
@@ -30,10 +33,13 @@ import org.codehaus.plexus.logging.LoggerManager;
 import org.eclipse.aether.transfer.TransferCancelledException;
 import org.eclipse.aether.transfer.TransferEvent;
 import org.eclipse.aether.transfer.TransferListener;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
 
 @Named("maven-pretty")
 @Component(role = EventSpy.class, hint = "output", description = "Pretty output for maven build.")
 public class PrettyEventSpy extends AbstractEventSpy {
+	private static final Pattern ESCAPE_PATTERN = Pattern.compile("\033\\[[^m]*m");
 	private static final String TERM_LINE_UP = "%dA";
 	private static final String TERM_LINE_BACK = "2K";
 	private static final String TERM_ESCAPE = "\033[";
@@ -55,11 +61,13 @@ public class PrettyEventSpy extends AbstractEventSpy {
 	private int lastLoopLength = 0;
 	private PrintStream output = System.out;
 	private File mavenOutputFile = null;
+	private Terminal terminal;
 
 	@Override
 	public synchronized void onEvent(Object event) throws Exception {
 		try {
 			if (outputThread.get() == null && Boolean.toString(true).equals(System.getenv().getOrDefault("PRETTY", "false"))) {
+				terminal = TerminalBuilder.terminal();
 				outputThread.set(new Thread(this::output));
 				outputThread.get().setDaemon(true);
 				outputThread.get().start();
@@ -335,6 +343,7 @@ public class PrettyEventSpy extends AbstractEventSpy {
 		int nbSuccess = 0;
 		int nbPlanned = 0;
 		int nbSkipped = 0;
+		int width = terminal.getWidth();
 		for (Entry<MavenProject, Deque<ProjectStatus>> entry : queues.entrySet()) {
 			StringBuilder sb = new StringBuilder();
 			ProjectStatus lastStatus = lastStatuses.get(entry.getKey());
@@ -370,17 +379,76 @@ public class PrettyEventSpy extends AbstractEventSpy {
 			output.print(TERM_ESCAPE + TERM_LINE_BACK);
 		}
 		for (String finishedItem : finished) {
-			output.println(finishedItem);
+			printLine(output, finishedItem, width);
 		}
 		int loopLength = 0;
 		for (String buildingItem : building) {
-			output.println(buildingItem);
+			printLine(output, buildingItem, width);
 			loopLength++;
 		}
-		output.println(String.format("Built " + TERM_ESCAPE + TERM_BOLD + "%5$d/%4$d" + TERM_RESET + " projects... Failed: %1$d - Success: %2$d - Planned: %3$d - Skipped: %4$s",
-				nbFailed, nbSuccess, nbPlanned, queues.size(), nbSuccess, nbSkipped));
+		printLine(output, String.format("Built " + TERM_ESCAPE + TERM_BOLD + "%5$d/%4$d" + TERM_RESET + " projects... Failed: %1$d - Success: %2$d - Planned: %3$d - Skipped: %4$s",
+				nbFailed, nbSuccess, nbPlanned, queues.size(), nbSuccess, nbSkipped), width);
 		loopLength++;
 		lastLoopLength = loopLength;
 		return empty;
+	}
+
+	private void printLine(PrintStream out, String value, int maxWidth) {
+		out.println(ellipsize(value, maxWidth, ">", 1));
+	}
+
+	public static String ellipsize(String value, int maxWidth) {
+		return ellipsize(value, maxWidth, "", 0);
+	}
+
+	public static String ellipsize(String value, int maxWidth, String suffix, int suffixLength) {
+		boolean resetNeeded = false;
+		boolean suffixNeeded = false;
+		int realLength = 0;
+		int lastStop = 0;
+		StringBuilder ellipsized = new StringBuilder();
+		Matcher m = ESCAPE_PATTERN.matcher(value);
+		MatchResult[] matches = m.results().toArray(i -> new MatchResult[i]);
+		if (matches.length == 0) {
+			if (value.length() <= maxWidth) {
+				return value;
+			} else if (value.length() == maxWidth) {
+				return value.substring(0, maxWidth);
+			} else {
+				return value.substring(0, maxWidth - suffixLength) + suffix;
+			}
+		}
+		for (MatchResult g : matches) {
+			// length: increment from last regexp match to current regexp start
+			realLength += g.start() - lastStop;
+			// check if adding last segment overflow maxWidth
+			int stop = g.start();
+			if (realLength >= maxWidth) {
+				// update stop to truncate segment at appropriate size
+				stop -= realLength - maxWidth;
+				if (length(value.substring(stop)) > 0) {
+					suffixNeeded = true;
+					stop -= suffixLength;
+				}
+			}
+			ellipsized.append(value.substring(lastStop, stop));
+			if (realLength >= maxWidth) {
+				break;
+			}
+			ellipsized.append(value.substring(g.start(), g.end()));
+			lastStop = g.end();
+			resetNeeded = !resetNeeded;
+		}
+		if (resetNeeded) {
+			ellipsized.append(TERM_RESET);
+		}
+		if (suffixNeeded) {
+			ellipsized.append(suffix);
+		}
+		return ellipsized.toString();
+	}
+
+	private static int length(String value) {
+		return ESCAPE_PATTERN.matcher(value).replaceAll("").length();
 	}
 }
